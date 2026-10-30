@@ -6,6 +6,8 @@ so they never depend on the source format.
 """
 
 import hashlib
+import re
+import unicodedata
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -75,8 +77,8 @@ class Chunk(BaseModel):
     heading_path: list[str]
     ordinal: int  # position within its section
     text: str
-    embed_text: str  # heading path prefix + text; what the embedder sees
-    content_hash: str  # hash of `embed_text`; embedding cache key in CP3
+    embed_text: str  # heading path (without document title) + text; what the embedder sees
+    content_hash: str  # embed_content_hash(embed_text); with the model id, the embedding key
     word_count: int
     page_start: int | None
     page_end: int | None
@@ -93,3 +95,20 @@ def sha256_hex(data: bytes | str) -> str:
 def stable_key(*parts: object, length: int = 24) -> str:
     """Deterministic identifier from ordered parts. Unit separator avoids ambiguous joins."""
     return sha256_hex("\x1f".join(str(p) for p in parts))[:length]
+
+
+# Bump when normalization changes: old hashes then stop matching, so stale embeddings are
+# never reused for text that would now normalize differently.
+EMBED_NORMALIZATION_VERSION = "n1"
+
+
+def normalize_for_embedding(text: str) -> str:
+    """Unicode NFKC, whitespace collapsed. Case and punctuation are kept: they carry meaning
+    in technical text (`capture` vs `Capture`, `/v2/` vs `/v3/`)."""
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text)).strip()
+
+
+def embed_content_hash(text: str) -> str:
+    """Key for embedding reuse. Depends only on normalized content, never on which document,
+    version or workspace the text came from; provenance lives on the chunk row instead."""
+    return sha256_hex(f"{EMBED_NORMALIZATION_VERSION}\x1f{normalize_for_embedding(text)}")

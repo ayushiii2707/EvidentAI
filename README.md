@@ -2,17 +2,26 @@
 
 Evidence-driven technical documentation investigation and change-impact analysis.
 
-Status: **Phase 1, checkpoint CP1** — document validation, parsing (PDF + Markdown),
-section structure, and section-bounded chunking. No database, retrieval, or LLM yet.
+Status: **Phase 1, checkpoint CP2**
+- CP1: document validation, parsing (PDF + Markdown), section structure, chunking.
+- CP2: PostgreSQL schema, migrations, repositories, document-version lifecycle,
+  scope snapshots, workspace isolation (see `docs/data-model.md`).
+
+No ingestion worker, embeddings, retrieval or LLM yet.
 
 ## Quick start
 
 ```bash
 uv sync
+docker compose up -d db                       # Postgres 16 + pgvector on 127.0.0.1:5433
+uv run alembic upgrade head                   # migrate the dev database (owner role)
 uv run python scripts/render_pdfs.py          # Markdown corpus -> PDFs in corpus/acmepay/build/
 uv run evidentai parse corpus/acmepay/build/v3.0/auth-guide.pdf --tree
-uv run pytest
+uv run pytest                                 # DB tests use a disposable evidentai_test database
 ```
+
+Configuration is read from environment variables; `.env.example` lists them, with
+local-development defaults that must not be used beyond a laptop.
 
 ## Corpus
 

@@ -5,7 +5,10 @@ Rules:
 - Blocks are packed whole until `max_words`; a single oversized block is split on
   sentence boundaries (prose) or line boundaries (code, tables).
 - `embed_text` prefixes the heading path so a chunk keeps its section context when
-  embedded on its own.
+  embedded on its own. The document title (the root heading) is left out: it usually
+  carries the version label, which would make identical sections in two versions hash
+  differently and defeat embedding reuse. Version identity is provenance, stored on the
+  document version, not part of the embedded content.
 
 Sizes are in whitespace-separated words, not model tokens. The embedding model's
 tokenizer is introduced in CP3; the limit will be re-checked against it there.
@@ -19,7 +22,7 @@ from evidentai.ingestion.models import (
     Chunk,
     ParsedDocument,
     Section,
-    sha256_hex,
+    embed_content_hash,
     stable_key,
 )
 
@@ -35,11 +38,19 @@ def word_count(text: str) -> int:
 def chunk_document(doc: ParsedDocument, max_words: int = DEFAULT_MAX_WORDS) -> list[Chunk]:
     chunks: list[Chunk] = []
     for section in doc.sections:
-        chunks.extend(_chunk_section(doc.source_sha256, section, max_words))
+        chunks.extend(_chunk_section(doc.source_sha256, section, max_words, doc.title))
     return chunks
 
 
-def _chunk_section(source_sha: str, section: Section, max_words: int) -> list[Chunk]:
+def embed_prefix(heading_path: list[str], title: str | None) -> list[str]:
+    if heading_path and title is not None and heading_path[0] == title:
+        return heading_path[1:]
+    return heading_path
+
+
+def _chunk_section(
+    source_sha: str, section: Section, max_words: int, title: str | None
+) -> list[Chunk]:
     pieces: list[Block] = []
     for block in section.blocks:
         pieces.extend(_split_block(block, max_words))
@@ -57,7 +68,8 @@ def _chunk_section(source_sha: str, section: Section, max_words: int) -> list[Ch
     if current:
         groups.append(current)
 
-    return [_make_chunk(source_sha, section, i, group) for i, group in enumerate(groups)]
+    prefix = embed_prefix(section.heading_path, title)
+    return [_make_chunk(source_sha, section, i, g, prefix) for i, g in enumerate(groups)]
 
 
 def _split_block(block: Block, max_words: int) -> list[Block]:
@@ -81,10 +93,12 @@ def _split_block(block: Block, max_words: int) -> list[Block]:
     return [block.model_copy(update={"text": p}) for p in parts]
 
 
-def _make_chunk(source_sha: str, section: Section, ordinal: int, blocks: list[Block]) -> Chunk:
+def _make_chunk(
+    source_sha: str, section: Section, ordinal: int, blocks: list[Block], prefix: list[str]
+) -> Chunk:
     text = "\n\n".join(b.text for b in blocks)
     path = section.heading_path
-    embed_text = f"{PATH_SEPARATOR.join(path)}\n\n{text}" if path else text
+    embed_text = f"{PATH_SEPARATOR.join(prefix)}\n\n{text}" if prefix else text
     pages = [b.provenance.page for b in blocks if b.provenance.page is not None]
     lines = [b.provenance.line for b in blocks if b.provenance.line is not None]
     return Chunk(
@@ -94,7 +108,7 @@ def _make_chunk(source_sha: str, section: Section, ordinal: int, blocks: list[Bl
         ordinal=ordinal,
         text=text,
         embed_text=embed_text,
-        content_hash=sha256_hex(embed_text),
+        content_hash=embed_content_hash(embed_text),
         word_count=word_count(text),
         page_start=min(pages) if pages else None,
         page_end=max(pages) if pages else None,
